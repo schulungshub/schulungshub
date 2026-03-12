@@ -33,7 +33,12 @@ func Load() *Config {
 }
 
 func (c *Config) DSN() string {
-	return c.DBUser + ":" + c.DBPass + "@tcp(" + c.DBHost + ":" + c.DBPort + ")/" + c.DBName + "?parseTime=true&charset=utf8mb4"
+	return c.DBUser + ":" + c.DBPass + "@tcp(" + c.DBHost + ":" + c.DBPort + ")/" + c.DBName + "?parseTime=true&charset=utf8mb4&multiStatements=true"
+}
+
+// DSNRoot returns a DSN without database name (for CREATE DATABASE).
+func (c *Config) DSNRoot() string {
+	return c.DBUser + ":" + c.DBPass + "@tcp(" + c.DBHost + ":" + c.DBPort + ")/?parseTime=true&charset=utf8mb4&multiStatements=true"
 }
 
 func getEnv(key, fallback string) string {
