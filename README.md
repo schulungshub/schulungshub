@@ -11,7 +11,7 @@ Serverbasiert, multi-mandant-fähig, vollständig offline-tauglich im Intranet.
 1. [Überblick & Einsatzzweck](#überblick--einsatzzweck)
 2. [Installation](#installation)
 3. [Abteilungen verwalten](#abteilungen-verwalten)
-4. [Architektur](#architektur)
+4. [Architektur & Aufbau](#architektur--aufbau)
 5. [Konfiguration](#konfiguration)
 6. [Sicherheit](#sicherheit)
 7. [API-Referenz](#api-referenz)
@@ -158,7 +158,9 @@ Löscht die Abteilung und **alle** zugehörigen Daten (Benutzer, Bewertungen, In
 
 ---
 
-## Architektur
+## Architektur & Aufbau
+
+### Systemübersicht
 
 ```
 Browser (Chrome/Edge)
@@ -166,10 +168,10 @@ Browser (Chrome/Edge)
        | HTTP(S)
        v
 +---------------------------+
-|  SchulungsHub Server      |
+|  SchulungsHub Server      |  Ein einzelner Prozess, kein Framework
 |                           |
-|  Go Binary                |  REST-API + statische Dateien
-|  web-v4/ (Frontend)       |  HTML + JS + CSS
+|  Go Binary                |  REST-API (JSON) + statische Dateien
+|  web-v4/ (Frontend)       |  HTML + JS + CSS, vom Server ausgeliefert
 +---------------------------+
        |
        v
@@ -178,16 +180,83 @@ Browser (Chrome/Edge)
 +---------------------------+
 ```
 
-### Request-Flow
+Die gesamte Anwendung besteht aus **einem Binary + einem Ordner**. Der Go-Server liefert sowohl die API als auch das Frontend aus. Es gibt keinen separaten Webserver, keinen Node.js-Prozess, kein npm.
 
-1. Browser sendet HTTP-Request mit Session-Cookie
-2. Server prüft Cookie → `sessions`-Tabelle → User / Role / `dept_id`
-3. Handler filtert **alle** Queries per `dept_id` (Mandantentrennung)
-4. Response als JSON oder HTTP-Statuscode
+### Wie hängt alles zusammen?
 
-### Kein lokaler Cache
+```
+schulungshub-linux-amd64          ← Der Server (ein Prozess)
+  │
+  ├── liest .env                  ← DB-Zugangsdaten, Port, Setup-Key
+  │
+  ├── verbindet sich mit MySQL    ← erstellt DB + Tabellen beim Start
+  │
+  ├── liefert web-v4/ aus         ← Frontend (HTML/JS/CSS) als statische Dateien
+  │   │
+  │   ├── login.html              ← Login-Seite: Abteilung wählen → User wählen → Passwort
+  │   ├── index.html              ← Hauptanwendung (Single Page App)
+  │   ├── js/                     ← 24 Module: Sidebar, Editor, Bewertung, Prüfung, Admin...
+  │   ├── vendor/                 ← UIkit (UI-Framework), marked.js (Markdown), Fonts
+  │   └── img/                    ← Gefahrensymbole, Icons
+  │
+  └── stellt REST-API bereit      ← /api/auth/*, /api/users/*, /api/content/*, ...
+      │
+      ├── auth/                   ← Login, Sessions, RFID, Rate Limiting
+      ├── api/                    ← Daten-Handler: Benutzer, Inhalte, Ziele, Bewertungen, Prüfung
+      └── config/                 ← .env einlesen
+```
 
-Jeder Lese- und Schreibvorgang ist ein API-Call. Kein State wird im Browser persistiert. Daten kommen immer frisch vom Server.
+### Datenfluss
+
+1. Browser öffnet `login.html` → wählt Abteilung → wählt Benutzer → gibt Passwort ein
+2. `POST /api/auth/login` → Server prüft Passwort (PBKDF2) → erstellt Session in MySQL → setzt Cookie
+3. Browser wird auf `index.html` weitergeleitet → lädt alle JS-Module
+4. Jede Aktion (Inhalt laden, Bewertung speichern, Benutzer anlegen) = ein API-Call
+5. Server prüft bei jedem Request: Cookie gültig? → Rolle? → `dept_id` filtern → Antwort
+
+**Kein lokaler Cache:** Kein State im Browser (kein LocalStorage, kein IndexedDB). Daten kommen immer frisch vom Server.
+
+### Frontend-Module (web-v4/js/)
+
+| Modul              | Aufgabe                                              |
+|--------------------|------------------------------------------------------|
+| `state.js`         | Globaler State, lädt alle Daten per API              |
+| `sidebar.js`       | Navigation, Inhaltsbaum                              |
+| `editor.js`        | Markdown-Editor für Lerninhalte (Admin)               |
+| `scoring.js`       | Bewertungs-Buttons (25/50/75/100/NIO)                |
+| `render.js`        | Seitenaufbau, Abschnitte darstellen                  |
+| `admin.js`         | Benutzerverwaltung, Rollenzuweisung                  |
+| `exam.js`          | Prüfungsmodus (Fragen, Timer, Auswertung)            |
+| `eval.js`          | Fortschrittsberechnung, KPI-Anzeige                  |
+| `auth.js`          | Session-Prüfung, Logout                              |
+| `search.js`        | Volltextsuche                                        |
+| `goal-editor.js`   | Lernziele verwalten (Admin)                          |
+| `export.js`        | JSON-Export                                          |
+| `app.js`           | Orchestrierung – startet alle Module in der richtigen Reihenfolge |
+
+Alle Module kommunizieren über `api-client.js` – einen zentralen HTTP-Wrapper. Kein Modul macht eigene `fetch()`-Aufrufe.
+
+### Backend-Struktur (Go-Quellcode)
+
+| Verzeichnis   | Aufgabe                                              |
+|---------------|------------------------------------------------------|
+| `main.go`     | Einstiegspunkt, Router, Auto-Migrate                 |
+| `api/`        | REST-Handler für alle Daten-Endpoints                |
+| `auth/`       | Login, Sessions, Passwort-Hashing, Rate Limiting     |
+| `config/`     | `.env` einlesen, Konfiguration bereitstellen         |
+
+### Tech-Stack
+
+| Komponente       | Technologie                          |
+|------------------|--------------------------------------|
+| Backend          | Go (stdlib `net/http`, kein Framework)|
+| Datenbank        | MySQL 8.0, InnoDB, utf8mb4           |
+| Passwort-Hash    | PBKDF2-SHA256 (120.000 Iterationen)  |
+| Sessions         | Server-seitig in MySQL, HttpOnly Cookie |
+| Frontend         | Vanilla JS, kein Build-Step          |
+| UI-Framework     | UIkit 3 (lokal gebündelt)            |
+| Markdown         | marked.js (lokal gebündelt)          |
+| Externe Abhängigkeiten | Keine – alles lokal, kein CDN, kein npm |
 
 ---
 
