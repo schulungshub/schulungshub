@@ -17,7 +17,12 @@ DEPT_SLUG="${2}"
 ADMIN_USER="${3}"
 ADMIN_PASS="${4}"
 ADMIN_NAME="${5:-$ADMIN_USER}"
-SERVER="http://localhost:8090"
+# Port aus .env laden falls vorhanden
+if [[ -f ".env" ]]; then
+  PORT=$(grep '^PORT=' .env | cut -d'=' -f2-)
+fi
+PORT="${PORT:-8080}"
+SERVER="http://localhost:$PORT"
 
 if [[ -z "$DEPT_NAME" || -z "$DEPT_SLUG" || -z "$ADMIN_USER" || -z "$ADMIN_PASS" ]]; then
   echo "Fehler: Pflichtfelder fehlen."
